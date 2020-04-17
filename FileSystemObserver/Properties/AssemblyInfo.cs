@@ -6,11 +6,11 @@ using System.Runtime.InteropServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("FileSystemObserver")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyDescription("A wrapper around System.IO.FileSystemWatcher.")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("FileSystemObserver")]
-[assembly: AssemblyCopyright("Copyright ©  2020")]
+[assembly: AssemblyCopyright("Copyright © 2020 Proless")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
