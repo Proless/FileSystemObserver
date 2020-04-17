@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30011.22
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FileSystemObserver", "FileSystemObserver\FileSystemObserver.csproj", "{D3A0ECBE-1B44-4CD9-A67D-3281F8BD5F74}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D3A0ECBE-1B44-4CD9-A67D-3281F8BD5F74}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D3A0ECBE-1B44-4CD9-A67D-3281F8BD5F74}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D3A0ECBE-1B44-4CD9-A67D-3281F8BD5F74}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D3A0ECBE-1B44-4CD9-A67D-3281F8BD5F74}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {9C8F01C1-BFAF-4A75-820C-3C280D04AE19}
+	EndGlobalSection
+EndGlobal
