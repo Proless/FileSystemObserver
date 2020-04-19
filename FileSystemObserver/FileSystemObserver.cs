@@ -6,18 +6,40 @@ using System.Linq;
 
 namespace FSO
 {
+	public enum EntryType
+	{
+		File,
+		Directory
+	}
 	public class FileSystemObserver : IDisposable, ISupportInitialize
 	{
 		// Fields
+		/// <summary>
+		/// Thé underlying FileSystemWatcher component.
+		/// </summary>
 		private FileSystemWatcher _fileSystemWatcher;
+		/// <summary>
+		/// The file extensions to monitor.
+		/// </summary>
 		private string[] _fileExts;
-		private bool checkCondition = false;
-		private Predicate<string> _raiseEventsCondition;
+		/// <summary>
+		/// A flag whether a predicate should be called or not, to determine if an event for a file/directory should be raised.
+		/// </summary>
+		private bool checkForCondition = false;
+		/// <summary>
+		/// The predicate which will be called on the full path of the affected file/directory.
+		/// </summary>
+		private Func<EntryType, string, bool> _raiseEventCondition;
+		/// <summary>
+		/// A dictionary to store the paths of monitored files.
+		/// </summary>
 		private Dictionary<int, HashSet<string>> _files;
+		/// <summary>
+		/// A dictionary to store the paths of monitored directories.
+		/// </summary>
 		private Dictionary<int, HashSet<string>> _dirs;
 
 		// Properties
-		public bool RaiseEventsForSubdirectories { get; set; } = false;
 		public string ObservedPath { get { return _fileSystemWatcher.Path; } set { _fileSystemWatcher.Path = value; GetFileSystemEntries(); } }
 		public bool IncludeSubdirectories { get { return _fileSystemWatcher.IncludeSubdirectories; } set { _fileSystemWatcher.IncludeSubdirectories = value; GetFileSystemEntries(); } }
 		public int InternalBufferSize { get { return _fileSystemWatcher.InternalBufferSize; } set { _fileSystemWatcher.InternalBufferSize = value; } }
@@ -28,20 +50,20 @@ namespace FSO
 		public ISite Site { get { return _fileSystemWatcher.Site; } set { _fileSystemWatcher.Site = value; } }
 
 		// Constructors
-		public FileSystemObserver(Predicate<string> raiseEventsCondition = null, params string[] fileExts)
+		public FileSystemObserver(Func<EntryType, string, bool> raiseEventCondition = null, params string[] fileExts)
 		{
 			_fileSystemWatcher = new FileSystemWatcher();
-			Initialize(raiseEventsCondition, fileExts);
+			Initialize(raiseEventCondition, fileExts);
 		}
-		public FileSystemObserver(string path, Predicate<string> raiseEventsCondition = null, params string[] fileExts)
+		public FileSystemObserver(string path, Func<EntryType, string, bool> raiseEventCondition = null, params string[] fileExts)
 		{
 			_fileSystemWatcher = new FileSystemWatcher(path);
-			Initialize(raiseEventsCondition, fileExts);
+			Initialize(raiseEventCondition, fileExts);
 		}
-		public FileSystemObserver(string path, string filter, Predicate<string> raiseEventsCondition = null, params string[] fileExts)
+		public FileSystemObserver(string path, string filter, Func<EntryType, string, bool> raiseEventCondition = null, params string[] fileExts)
 		{
 			_fileSystemWatcher = new FileSystemWatcher(path, filter);
-			Initialize(raiseEventsCondition, fileExts);
+			Initialize(raiseEventCondition, fileExts);
 		}
 
 		// Events
@@ -79,100 +101,191 @@ namespace FSO
 		}
 		private void OnChanged(object sender, FileSystemEventArgs e)
 		{
-			RaiseChangedEventFor(e.FullPath);
+			if (IsFile(e.FullPath))
+			{
+				// Raise a changed event on the file if applicable.
+				RaiseChangedEventFor(EntryType.File, e.FullPath);
+			}
+			else if (IsDirectory(e.FullPath))
+			{
+				// Raise a changed event on the directory if applicable.
+				RaiseChangedEventFor(EntryType.Directory, e.FullPath);
+			}
+
 		}
 		private void OnRenamed(object sender, RenamedEventArgs e)
 		{
-			RaiseRenamedEventFor(e.OldFullPath, e.FullPath);
 			if (IsFile(e.OldFullPath) || File.Exists(e.FullPath))
 			{
-				// Update file entries.
+				// Update file entry.
 				RemoveEntry(_files, e.OldFullPath);
 				AddEntry(_files, e.FullPath);
+
+				// Raise a renamed event on the file if applicable.
+				RaiseRenamedEventFor(EntryType.File, e.OldFullPath, e.FullPath);
 			}
 			else if (IsDirectory(e.OldFullPath) || Directory.Exists(e.FullPath))
 			{
-				// Update file entries
-				var renamedFiles = GetRenamedEntries(_files, e.OldFullPath, e.FullPath);
-				RemoveEntries(_files, renamedFiles.Keys);
-				AddEntries(_files, renamedFiles.Values);
-				// Raise renamed events.
-				RaiseRenamedEventsFor(renamedFiles);
-
-				// Update directory entries.
+				// Update directory entry.
 				RemoveEntry(_dirs, e.OldFullPath);
 				AddEntry(_dirs, e.FullPath);
-				var renamedDirectories = GetRenamedEntries(_dirs, e.OldFullPath, e.FullPath);
-				RemoveEntries(_dirs, renamedDirectories.Keys);
-				AddEntries(_dirs, renamedDirectories.Values);
-				if (RaiseEventsForSubdirectories)
+
+				// Raise a renamed event on the directory if applicable.
+				RaiseRenamedEventFor(EntryType.Directory, e.OldFullPath, e.FullPath);
+
+				// Get renamed files directly within the directory.
+				var renamedFiles = GetRenamedEntries(_files, e.OldFullPath, e.FullPath, false);
+				// Update renamed files entries, which are directly within the directory.
+				RemoveEntries(_files, renamedFiles.Keys);
+				AddEntries(_files, renamedFiles.Values);
+
+				// Get all renamed subdirectories.
+				var renamedSubDirs = GetRenamedEntries(_dirs, e.OldFullPath, e.FullPath);
+
+				if (IncludeSubdirectories)
 				{
-					// Raise renamed events.
-					RaiseRenamedEventsFor(renamedDirectories);
+					// Raise renamed events on the files if applicable.
+					RaiseRenamedEventsFor(EntryType.File, renamedFiles);
+					foreach (var dir in renamedSubDirs)
+					{
+						// Update renamed subdirectory entry.
+						RemoveEntry(_dirs, dir.Key);
+						AddEntry(_dirs, dir.Value);
+						// Raise a renamed event on the subdirectory if applicable.
+						RaiseRenamedEventFor(EntryType.Directory, dir.Key, dir.Value);
+
+						// Get renamed files directly within the subdirectory.
+						var renamedSubDirFiles = GetRenamedEntries(_files, dir.Key, dir.Value, false);
+						// Update renamed files entries.
+						RemoveEntries(_files, renamedSubDirFiles.Keys);
+						AddEntries(_files, renamedSubDirFiles.Values);
+						// Raise renamed events on the files if applicable.
+						RaiseRenamedEventsFor(EntryType.File, renamedSubDirFiles);
+					}
+
+				}
+				else
+				{
+					// Update renamed subdirectories entries.
+					RemoveEntries(_dirs, renamedSubDirs.Keys);
+					AddEntries(_dirs, renamedSubDirs.Values);
+
+					// Get all renamed files.
+					var allRenamedFiles = GetRenamedEntries(_files, e.OldFullPath, e.FullPath);
+					// Update all renamed files entries.
+					RemoveEntries(_files, allRenamedFiles.Keys);
+					AddEntries(_files, allRenamedFiles.Values);
 				}
 			}
 		}
 		private void OnCreated(object sender, FileSystemEventArgs e)
 		{
-			RaiseCreatedEventFor(e.FullPath);
 			if (IsFile(e.FullPath))
 			{
-				// Update file entries.
+				// Add file entry.
 				AddEntry(_files, e.FullPath);
+				// Raise a created event on the created file if applicable.
+				RaiseCreatedEventFor(EntryType.File, e.FullPath);
 			}
 			else if (IsDirectory(e.FullPath))
 			{
-				// Update file entries.
-				var createdFiles = EnumerateFiles(e.FullPath, GetSearchOption(), _fileExts);
-				AddEntries(_files, createdFiles);
-				// Raise created events.
-				RaiseCreatedEventsFor(createdFiles);
-
-				// Update directory entries.
+				// Add directory entry.
 				AddEntry(_dirs, e.FullPath);
-				var createdDirs = Directory.EnumerateDirectories(e.FullPath, "*.*", GetSearchOption());
-				AddEntries(_dirs, createdFiles);
-				// Raise created events.
-				if (RaiseEventsForSubdirectories)
-				{
-					RaiseCreatedEventsFor(createdDirs);
-				}
+				// Raise a created event on the created directory if applicable.
+				RaiseCreatedEventFor(EntryType.Directory, e.FullPath);
 
+				if (IncludeSubdirectories)
+				{
+					// Get created files directly within the created directory.
+					var createdFiles = EnumerateFiles(e.FullPath, SearchOption.TopDirectoryOnly, _fileExts);
+					// Add created files entries.
+					AddEntries(_files, createdFiles);
+					// Raise a created event on the created files if applicable.
+					RaiseCreatedEventsFor(EntryType.File, createdFiles);
+
+					// Get created subdirectories.
+					var createdSubDirs = Directory.EnumerateDirectories(e.FullPath, "*.*", GetSearchOption()).OrderBy(path => path.Length);
+					foreach (var dir in createdSubDirs)
+					{
+						// Add subdirectory entry.
+						AddEntry(_dirs, dir);
+						// Raise a created event on the created subdirectory if applicable.
+						RaiseCreatedEventFor(EntryType.Directory, dir);
+
+						// Get created files directly within the created subdirectory.
+						var createdSubDirFiles = EnumerateFiles(dir, SearchOption.TopDirectoryOnly, _fileExts);
+						// Add created files entries.
+						AddEntries(_files, createdSubDirFiles);
+						// Raise a created event on the created files if applicable.
+						RaiseCreatedEventsFor(EntryType.File, createdSubDirFiles);
+					}
+				}
 			}
 		}
 		private void OnDeleted(object sender, FileSystemEventArgs e)
 		{
-			RaiseDeletedEventFor(e.FullPath);
 			if (IsFile(e.FullPath))
 			{
-				// Update file entries.
+				// Remove file entry.
 				RemoveEntry(_files, e.FullPath);
+				// Raise a deleted event on the file if applicable.
+				RaiseDeletedEventFor(EntryType.File, e.FullPath);
 			}
 			else if (IsDirectory(e.FullPath))
 			{
-				// Update file entries.
-				var deletedFiles = GetDeletedEntries(_files, e.FullPath).ToArray();
-				RemoveEntries(_files, deletedFiles);
-				RaiseDeletedEventsFor(deletedFiles);
-
-				// Update directory entries.
+				// Remove directory entry.
 				RemoveEntry(_dirs, e.FullPath);
-				var deletedDirs = GetDeletedEntries(_dirs, e.FullPath).ToArray();
-				RemoveEntries(_dirs, deletedDirs);
-				if (RaiseEventsForSubdirectories)
+				// Raise a deleted event on the directory if applicable.
+				RaiseDeletedEventFor(EntryType.Directory, e.FullPath);
+
+				// Get deleted files directly within the directory.
+				var deletedFiles = GetDeletedEntries(_files, e.FullPath, false).ToArray();
+
+				// Get all deleted subdirectories.
+				var deletedSubDirs = GetDeletedEntries(_dirs, e.FullPath).ToArray();
+
+				// Remove deleted files entries.
+				RemoveEntries(_files, deletedFiles);
+
+				if (IncludeSubdirectories)
 				{
-					RaiseDeletedEventsFor(deletedDirs);
+					// Raise a deleted event on the files if applicable.
+					RaiseDeletedEventsFor(EntryType.File, deletedFiles);
+					foreach (var dir in deletedSubDirs)
+					{
+
+						// Remove deleted subdirectory entry.
+						RemoveEntry(_dirs, dir);
+						// Raise a deleted event on the subdirectory if applicable.
+						RaiseDeletedEventFor(EntryType.Directory, dir);
+
+						// Get deleted files directly within the subdirectory.
+						var deletedSubDirFiles = GetDeletedEntries(_files, dir, false).ToArray();
+						// Remove deleted files entries.
+						RemoveEntries(_files, deletedSubDirFiles);
+						// Raise a deleted event on the files if applicable.
+						RaiseDeletedEventsFor(EntryType.File, deletedSubDirFiles);
+					}
+				}
+				else
+				{
+					// Remove deleted directories entries.
+					RemoveEntries(_dirs, deletedSubDirs);
+					// Get all deleted files.
+					var allDeletedFiles = GetDeletedEntries(_files, e.FullPath).ToArray();
+					// Remove all deleted files entries.
+					RemoveEntries(_files, allDeletedFiles);
 				}
 			}
 		}
 
-		// Initialize methods
-		private void Initialize(Predicate<string> raiseEventsCondition, string[] fileExts)
+		#region Initialize methods
+		private void Initialize(Func<EntryType, string, bool> raiseEventsCondition, string[] fileExts)
 		{
 			if (raiseEventsCondition != null)
 			{
-				_raiseEventsCondition = raiseEventsCondition;
-				checkCondition = true;
+				_raiseEventCondition = raiseEventsCondition;
+				checkForCondition = true;
 			}
 			_fileExts = fileExts?.Length > 0 ? fileExts : null;
 
@@ -208,22 +321,22 @@ namespace FSO
 				}
 			}
 		}
+		#endregion
 
-		/** Raise events methods **/
-
+		#region Raise events methods
 		// Renamed event
-		private void RaiseRenamedEventsFor(Dictionary<string, string> fileSystemEntries)
+		private void RaiseRenamedEventsFor(EntryType entriesType, Dictionary<string, string> fileSystemEntries)
 		{
 			foreach (var entry in fileSystemEntries)
 			{
-				RaiseRenamedEventFor(entry.Key, entry.Value);
+				RaiseRenamedEventFor(entriesType, entry.Key, entry.Value);
 			}
 		}
-		private void RaiseRenamedEventFor(string oldPath, string newPath)
+		private void RaiseRenamedEventFor(EntryType entryType, string oldPath, string newPath)
 		{
-			if (checkCondition && _raiseEventsCondition != null)
+			if (checkForCondition && _raiseEventCondition != null)
 			{
-				if (_raiseEventsCondition(oldPath))
+				if (_raiseEventCondition(entryType, oldPath))
 				{
 					string oldName = GetRelativePath(ObservedPath, oldPath);
 					string name = GetRelativePath(ObservedPath, newPath);
@@ -238,21 +351,20 @@ namespace FSO
 				var eventArgs = new RenamedEventArgs(WatcherChangeTypes.Renamed, ObservedPath, name, oldName);
 				Renamed?.Invoke(this, eventArgs);
 			}
-
 		}
 		// Created event
-		private void RaiseCreatedEventsFor(IEnumerable<string> fileSystemEntries)
+		private void RaiseCreatedEventsFor(EntryType entriesType, IEnumerable<string> fileSystemEntries)
 		{
 			foreach (var entry in fileSystemEntries)
 			{
-				RaiseCreatedEventFor(entry);
+				RaiseCreatedEventFor(entriesType, entry);
 			}
 		}
-		private void RaiseCreatedEventFor(string entry)
+		private void RaiseCreatedEventFor(EntryType entryType, string entry)
 		{
-			if (checkCondition && _raiseEventsCondition != null)
+			if (checkForCondition && _raiseEventCondition != null)
 			{
-				if (_raiseEventsCondition(entry))
+				if (_raiseEventCondition(entryType, entry))
 				{
 					string name = GetRelativePath(ObservedPath, entry);
 					Created?.Invoke(this, new FileSystemEventArgs(WatcherChangeTypes.Created, ObservedPath, name));
@@ -265,18 +377,18 @@ namespace FSO
 			}
 		}
 		// Deleted event
-		private void RaiseDeletedEventsFor(IEnumerable<string> fileSystemEntries)
+		private void RaiseDeletedEventsFor(EntryType entriesType, IEnumerable<string> fileSystemEntries)
 		{
 			foreach (var entry in fileSystemEntries)
 			{
-				RaiseDeletedEventFor(entry);
+				RaiseDeletedEventFor(entriesType, entry);
 			}
 		}
-		private void RaiseDeletedEventFor(string entry)
+		private void RaiseDeletedEventFor(EntryType entryType, string entry)
 		{
-			if (checkCondition && _raiseEventsCondition != null)
+			if (checkForCondition && _raiseEventCondition != null)
 			{
-				if (_raiseEventsCondition(entry))
+				if (_raiseEventCondition(entryType, entry))
 				{
 					string name = GetRelativePath(ObservedPath, entry);
 					Deleted?.Invoke(this, new FileSystemEventArgs(WatcherChangeTypes.Deleted, ObservedPath, name));
@@ -289,18 +401,18 @@ namespace FSO
 			}
 		}
 		// Changed event
-		private void RaiseChangedEventsFor(IEnumerable<string> fileSystemEntries)
+		private void RaiseChangedEventsFor(EntryType entriesType, IEnumerable<string> fileSystemEntries)
 		{
 			foreach (var entry in fileSystemEntries)
 			{
-				RaiseChangedEventFor(entry);
+				RaiseChangedEventFor(entriesType, entry);
 			}
 		}
-		private void RaiseChangedEventFor(string entry)
+		private void RaiseChangedEventFor(EntryType entryType, string entry)
 		{
-			if (checkCondition && _raiseEventsCondition != null)
+			if (checkForCondition && _raiseEventCondition != null)
 			{
-				if (_raiseEventsCondition(entry))
+				if (_raiseEventCondition(entryType, entry))
 				{
 					string name = GetRelativePath(ObservedPath, entry);
 					Changed?.Invoke(this, new FileSystemEventArgs(WatcherChangeTypes.Changed, ObservedPath, name));
@@ -312,7 +424,7 @@ namespace FSO
 				Changed?.Invoke(this, new FileSystemEventArgs(WatcherChangeTypes.Changed, ObservedPath, name));
 			}
 		}
-
+		#endregion
 
 		#region Helpers
 		public IEnumerable<string> EnumerateFiles(string path, SearchOption searchOption, params string[] fileExtensions)
@@ -341,15 +453,6 @@ namespace FSO
 		public IEnumerable<string> EnumerateAllFiles(string path, SearchOption searchOption)
 		{
 			return Directory.EnumerateFiles(path, "*.*", searchOption);
-		}
-		private string GetRelativePath(string basePath, string path)
-		{
-			if (string.IsNullOrEmpty(basePath)) throw new ArgumentNullException(nameof(basePath));
-			if (string.IsNullOrEmpty(path)) throw new ArgumentNullException(nameof(path));
-
-			string relativePath = path.Substring(basePath.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-			return relativePath;
 		}
 		private bool IsFile(string path)
 		{
@@ -418,35 +521,135 @@ namespace FSO
 		{
 			return IncludeSubdirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
 		}
-		private Dictionary<string, string> GetRenamedEntries(Dictionary<int, HashSet<string>> dict, string oldPath, string newPath)
+		private Dictionary<string, string> GetRenamedEntries(Dictionary<int, HashSet<string>> dict, string oldPath, string newPath, bool includeSubEntries = true)
 		{
 			Dictionary<string, string> dirs = new Dictionary<string, string>();
 			string newEntryParentRelativePath = GetRelativePath(ObservedPath, newPath);
 			int oldEntryDepth = GetDepth(oldPath);
-
-			foreach (var entry in dict.Keys.Where(key => key > oldEntryDepth).SelectMany(key => dict[key]))
+			var entries = dict.Keys.Where(key => key > oldEntryDepth).OrderBy(key => key).SelectMany(key => dict[key]);
+			if (includeSubEntries)
 			{
-				if (entry.StartsWith(oldPath))
+				foreach (var entry in entries)
 				{
-					// an alternative could be to simply use string.Replace(oldPath, newPath); performance ?
-					string entryRelativePath = GetRelativePath(oldPath, entry);
-					string newEntryPath = Path.Combine(ObservedPath, newEntryParentRelativePath);
-					string newEntryFullPath = Path.Combine(newEntryPath, entryRelativePath);
-					dirs.Add(entry, newEntryFullPath);
+					if (entry.StartsWith(oldPath))
+					{
+						string entryRelativePath = GetRelativePath(oldPath, entry);
+						string newEntryPath = Path.Combine(ObservedPath, newEntryParentRelativePath);
+						string newEntryFullPath = Path.Combine(newEntryPath, entryRelativePath);
+						dirs.Add(entry, newEntryFullPath);
+					}
+				}
+			}
+			else
+			{
+				foreach (var entry in entries)
+				{
+					int entryDepth = GetDepth(entry);
+					if (entry.StartsWith(oldPath) && entryDepth == oldEntryDepth + 1)
+					{
+						string entryRelativePath = GetRelativePath(oldPath, entry);
+						string newEntryPath = Path.Combine(ObservedPath, newEntryParentRelativePath);
+						string newEntryFullPath = Path.Combine(newEntryPath, entryRelativePath);
+						dirs.Add(entry, newEntryFullPath);
+					}
 				}
 			}
 			return dirs;
 		}
-		private IEnumerable<string> GetDeletedEntries(Dictionary<int, HashSet<string>> dict, string fullPath)
+		private IEnumerable<string> GetDeletedEntries(Dictionary<int, HashSet<string>> dict, string path, bool includeSubEntries = true)
 		{
-			int pathDepth = GetDepth(fullPath);
-			foreach (var entry in dict.Keys.Where(key => key > pathDepth).SelectMany(key => dict[key]))
+			int pathDepth = GetDepth(path);
+			var entries = dict.Keys.Where(key => key > pathDepth).OrderBy(key => key).SelectMany(key => dict[key]);
+			if (includeSubEntries)
 			{
-				if (entry.StartsWith(fullPath))
+				foreach (var entry in entries)
 				{
-					yield return entry;
+					if (entry.StartsWith(path))
+					{
+						yield return entry;
+					}
 				}
 			}
+			else
+			{
+				foreach (var entry in entries)
+				{
+					int entryDepth = GetDepth(entry);
+					if (entry.StartsWith(path) && entryDepth == pathDepth + 1)
+					{
+						yield return entry;
+					}
+				}
+			}
+		}
+		/** Copyright (c) 2014, Yves Goergen, http://unclassified.software/source/getrelativepath
+		 * Copying and distribution of this file, with or without modification, are permitted provided the
+		 * copyright notice and this notice are preserved. This file is offered as-is, without any warranty.**/
+		/// <summary>
+		/// Determines the relative path of the specified path relative to a base path.
+		/// </summary>
+		/// <param name="path">The path to make relative.</param>
+		/// <param name="basePath">The base path.</param>
+		/// <param name="throwOnDifferentRoot">If true, an exception is thrown for different roots, otherwise the source path is returned unchanged.</param>
+		/// <returns>The relative path.</returns>
+		private string GetRelativePath(string basePath, string path, bool throwOnDifferentRoot = true)
+		{
+			// Use case-insensitive comparing of path names.
+			// NOTE: This may be different on other systems.
+			StringComparison sc = StringComparison.InvariantCultureIgnoreCase;
+
+			// Are both paths rooted?
+			if (!Path.IsPathRooted(path))
+				throw new ArgumentException($"{nameof(path)} argument is not a rooted path.");
+			if (!Path.IsPathRooted(basePath))
+				throw new ArgumentException($"{nameof(basePath)} argument is not a rooted path.");
+
+			// Do both paths share the same root?
+			string pathRoot = Path.GetPathRoot(path);
+			string baseRoot = Path.GetPathRoot(basePath);
+			if (!string.Equals(pathRoot, baseRoot, sc))
+			{
+				if (throwOnDifferentRoot)
+				{
+					throw new InvalidOperationException("Both paths do not share the same root.");
+				}
+				else
+				{
+					return path;
+				}
+			}
+
+			// Cut off the path roots
+			path = path.Substring(pathRoot.Length);
+			basePath = basePath.Substring(baseRoot.Length);
+
+			// Cut off the common path parts
+			string[] pathParts = path.Split(Path.DirectorySeparatorChar);
+			string[] baseParts = basePath.Split(Path.DirectorySeparatorChar);
+			int commonCount;
+			for (
+				commonCount = 0;
+				commonCount < pathParts.Length &&
+				commonCount < baseParts.Length &&
+				string.Equals(pathParts[commonCount], baseParts[commonCount], sc);
+				commonCount++)
+			{
+			}
+
+			// Add .. for the way up from relBase
+			string newPath = "";
+			for (int i = commonCount; i < baseParts.Length; i++)
+			{
+				newPath += ".." + Path.DirectorySeparatorChar;
+			}
+
+			// Append the remaining part of the path
+			for (int i = commonCount; i < pathParts.Length; i++)
+			{
+				newPath = Path.Combine(newPath, pathParts[i]);
+			}
+
+			return newPath;
 		}
 		#endregion
 	}
