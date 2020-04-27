@@ -19,3 +19,4 @@ Monitored Path: C:\Monitored
 | C:\Monitored\file.txt  | file.txt |
 | C:\Monitored\Subdirectory\Subdirectory1  | Subdirectory\Subdirectory1  |
 | C:\Monitored\Subdirectory\file.txt  | Subdirectory\file.txt  |
+| C:\Monitored\Subdirectory\sub\file.txt  | Subdirectory\sub\file.txt  |
