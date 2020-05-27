@@ -11,9 +11,7 @@ A wrapper around FileSystemWatcher with exteneded functionality.
 
 ### Raises extra Events when the affected file system entry is a directory:
 
-- When a directory is deleted, a deleted event will be rasied for all deleted subdirectories/files.
-- When a directory is created, a created event will be rasied for all created subdirectories/files.
-- When a directory is renamed, a renamed event will be rasied for all renamed subdirectories/files.
+- When a directory is deleted / created / renamed, a corresponding event will be rasied for all subdirectories/files.
 
 Note that a file system entry name is considered by the FileSystemWatcher as being the relative path.
 
